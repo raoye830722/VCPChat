@@ -53,7 +53,7 @@ function loadFlowlockIntegration({ history, onSend, continueWritingPrompt = '请
     );
     // Route the classic-script dynamic import to the real pipeline in the host realm.
     context.loadPipeline = () => import(require('node:url').pathToFileURL(path.resolve('modules/chat/chatContextPipeline.js')).href);
-    vm.runInContext(source.replace("import('../modules/chat/chatContextPipeline.js')", 'loadPipeline()'), context, { filename: 'flowlock-integration.js' });
+    vm.runInContext(source.replace(/import\('.{1,2}\/modules\/chat\/chatContextPipeline\.js'\)/, 'loadPipeline()'), context, { filename: 'flowlock-integration.js' });
     window.initializeFlowlockIntegration({
         chatManager: { loadChatHistory: async () => {}, isReady: () => true },
         historyMutationAuthority: { replace: async () => {} },
