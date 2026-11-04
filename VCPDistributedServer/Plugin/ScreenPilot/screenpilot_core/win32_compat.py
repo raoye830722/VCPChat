@@ -337,8 +337,12 @@ class dxcam:
 # ============================================================
 
 class uiautomation:
-    """AX 树桥接骨架。GetRootControl/GetControlFromWindow 等由
-    uia_darwin 模块在 darwin 上提供完整实现后接入。"""
+    """AX 树桥接：实现载体在 uia_darwin，调用时惰性导入。"""
+
+    @staticmethod
+    def ControlFromHandle(hwnd, *a, **k):
+        from . import uia_darwin
+        return uia_darwin.get_control_from_window(int(hwnd))
 
     @staticmethod
     def GetRootControl(*a, **k):
