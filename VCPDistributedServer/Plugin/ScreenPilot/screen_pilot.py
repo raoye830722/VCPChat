@@ -49,6 +49,8 @@ if _sys.platform == "darwin":
     from screenpilot_core import win32_compat as _compat
     _compat.install()
     _compat.patch_geometry()
+    # 头部 from-import 在注入前已绑定原版引用，此处重绑本模块名字
+    get_virtual_screen_rect = _compat.get_virtual_screen_rect_patched
 
 
 # ============================================================
