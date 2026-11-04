@@ -4,6 +4,13 @@
 // 多个 Agent 可并行运行，互不阻塞主界面导航。
 
 console.log('[Flowlock] Module loaded (multi-session architecture).');
+// [FlowlockDiag] blackbox: key-path self-report via VCPLog channel. Diag never breaks main flow.
+function __flowlockDiag(electronAPI, event, detail = {}) {
+    try {
+        electronAPI?.sendVCPLogMessage?.({ type: 'flowlock_diag', data: { event, ...detail, t: Date.now() } });
+    } catch { /* diag never breaks main flow */ }
+}
+
 
 class FlowlockManager {
     constructor() {
@@ -141,6 +148,7 @@ class FlowlockManager {
         // 如果需要立即开始续写
         if (startImmediately) {
             this.scheduleNextRound(agentId, 500);
+            __flowlockDiag(this.electronAPI, 'start', { agentId, topicId });
         }
 
         return { success: true, message: '心流锁已启动' };
@@ -152,6 +160,8 @@ class FlowlockManager {
      * @param {Object} [options] - { silent?: boolean }
      */
     async stop(agentId, options = {}) {
+        const __flSess = this.sessions.get(agentId);
+        __flowlockDiag(this.electronAPI, 'stop', { agentId, reason: (__flSess && __flSess.completionReason) || options.reason || 'unknown', retryCount: __flSess ? __flSess.retryCount : null, lastError: String((__flSess && __flSess.lastError && __flSess.lastError.message) || (__flSess && __flSess.lastError) || '').slice(0, 200) });
         if (typeof agentId === 'object' && agentId !== null) {
             options = agentId;
             agentId = null;
@@ -198,6 +208,7 @@ class FlowlockManager {
      * 停止所有心流锁
      */
     async stopAll() {
+        __flowlockDiag(this.electronAPI, 'stopall', { count: this.sessions.size });
         const agentIds = Array.from(this.sessions.keys());
         for (const agentId of agentIds) {
             await this.stop(agentId);
@@ -418,6 +429,7 @@ class FlowlockManager {
                         'error'
                     );
                 }
+                __flowlockDiag(this.electronAPI, 'max_retries', { agentId: context.agentId, retryCount: session.retryCount, lastError: String((session.lastError && session.lastError.message) || session.lastError || '').slice(0, 300) });
                 session.completionReason = 'max_retries_exceeded';
                 await this.stop(context.agentId);
                 return;
@@ -493,6 +505,7 @@ class FlowlockManager {
      * cannot be undone by a late compression response.
      */
     suspendForContextCompaction(agentId, topicId) {
+        __flowlockDiag(this.electronAPI, 'suspend_compaction', { agentId, topicId });
         const session = this.sessions.get(agentId);
         if (!session || session.status !== 'active' || session.topicId !== topicId) return null;
         if (session.contextCompactionLease) return session.contextCompactionLease;
@@ -526,6 +539,7 @@ class FlowlockManager {
      * @param {number} delayMs - 延迟毫秒
      */
     scheduleNextRound(agentId, delayMs) {
+        __flowlockDiag(this.electronAPI, 'schedule', { agentId, delayMs });
         const session = this.sessions.get(agentId);
         if (!session || session.status !== 'active' || session.contextCompactionLease) return;
 
@@ -585,6 +599,7 @@ class FlowlockManager {
         session.nextDelaySeconds = null;
 
         console.log(`[Flowlock] Agent ${agentId} triggering round ${session.round}, messageId: ${messageId}`);
+        __flowlockDiag(this.electronAPI, 'heartbeat', { agentId, round: session.round, messageId });
 
         // 更新侧栏与当前聊天标题心跳动画
         this.triggerSidebarHeartbeat(agentId);
@@ -615,6 +630,7 @@ class FlowlockManager {
             // 走错误重试逻辑
             session.retryCount++;
             if (session.retryCount >= session.maxRetries) {
+                __flowlockDiag(this.electronAPI, 'max_retries', { agentId, retryCount: session.retryCount, lastError: String(session.lastError || '').slice(0, 300) });
                 session.completionReason = 'max_retries_exceeded';
                 await this.stop(agentId);
                 return;
