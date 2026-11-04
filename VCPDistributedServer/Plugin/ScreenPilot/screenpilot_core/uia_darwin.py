@@ -153,9 +153,46 @@ class _Rect:
         return self._h
 
 
+def _axvalue_to_tuple(value):
+    """AXValue 封装对象 → (x, y) / (w, h) 元组。
+
+    pyobjc 绑定形态（实测背书）：AXValueGetValue(value, type, None)
+    的 out 参数必须传 None，数据直接从返回值携带——传结构体会
+    ValueError。兼容已解包的 tuple/list 形态。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)):
+        return tuple(value)
+    from ApplicationServices import (
+        AXValueGetValue, AXValueGetType,
+        kAXValueCGPointType, kAXValueCGSizeType, AXValueGetTypeID,
+    )
+    from CoreFoundation import CFGetTypeID
+
+    try:
+        if CFGetTypeID(value) != AXValueGetTypeID():
+            return None
+        vtype = AXValueGetType(value)
+        if vtype == kAXValueCGPointType:
+            ok, out = AXValueGetValue(value, kAXValueCGPointType, None)
+            return (out.x, out.y) if ok else None
+        if vtype == kAXValueCGSizeType:
+            ok, out = AXValueGetValue(value, kAXValueCGSizeType, None)
+            return (out.width, out.height) if ok else None
+    except Exception:
+        pass
+    try:
+        return tuple(value)
+    except Exception:
+        return None
+
+
+
+
 def _rect_of(ref):
-    pos = _attr(ref, "AXPosition")
-    size = _attr(ref, "AXSize")
+    pos = _axvalue_to_tuple(_attr(ref, "AXPosition"))
+    size = _axvalue_to_tuple(_attr(ref, "AXSize"))
     if not pos or not size:
         return None
     try:
@@ -401,10 +438,34 @@ class AXNode:
 # 窗口解析：CGWindowID → AX 根节点
 # ============================================================
 
-def _activate_ax_for_app(app_ref):
-    """激活 Electron/Chromium 应用的 AX 树（否则只有稀疏骨架）。"""
+_ACTIVATED_PIDS = set()
+
+
+def _activate_ax_for_app(app_ref, pid=None):
+    """激活 Electron/Chromium 应用的 AX 树（否则只有稀疏骨架）。
+
+    AXManualAccessibility 对 Chromium>=91 生效但树展开有秒级延迟；
+    AXEnhancedUserInterface 需持续持有引用。首次激活后短轮询等待
+    AXWebArea 出现，超时放弃（非 Electron 应用无此需求）。
+    """
+    key = int(pid or 0)
+    if key and key in _ACTIVATED_PIDS:
+        return
     _set_attr(app_ref, "AXManualAccessibility", True)
     _set_attr(app_ref, "AXEnhancedUserInterface", True)
+    if key:
+        _ACTIVATED_PIDS.add(key)
+    # 短轮询等待树展开（最多2.5s，非Electron应用立即通过）
+    import time
+    for _ in range(5):
+        err, wins = _ax()["copy_attr"](app_ref, "AXWindows", None)
+        if err == 0 and wins:
+            probe = _ax()["copy_attr"](wins[0], "AXChildren", None)
+            if probe[0] == 0 and probe[1]:
+                deep = _ax()["copy_attr"](probe[1][0], "AXChildren", None)
+                if deep[0] == 0 and deep[1]:
+                    return
+        time.sleep(0.5)
 
 
 def _window_bounds(cid):
@@ -442,7 +503,7 @@ def get_control_from_window(hwnd):
 
     with _LOCK:
         app_ref = _ax()["create_app"](meta["pid"])
-        _activate_ax_for_app(app_ref)
+        _activate_ax_for_app(app_ref, meta["pid"])
         err, windows = _ax()["copy_attr"](app_ref, "AXWindows", None)
         if err != 0 or not windows:
             # 退回 app 层，walk 仍可用（children 含菜单栏等）
