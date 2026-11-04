@@ -111,7 +111,7 @@ async function continueWritingForContext(params) {
 
     // 所有 Flowlock 心跳消息必须使用系统提示标记；已有前缀时不重复添加。
     temporaryPrompt = normalizeFlowlockHeartbeatPrompt(temporaryPrompt);
-    const { assembleRequestMessages } = await import('./modules/chat/chatContextPipeline.js');
+    const { assembleRequestMessages } = await import(new URL('modules/chat/chatContextPipeline.js', document.baseURI).href);
     const { messagesForVCP } = await assembleRequestMessages({
         electronAPI: chatAPI, agentConfig: agentConfig || {}, history: historyForVCP,
         context: { agentId, topicId }, temporaryPrompt,
