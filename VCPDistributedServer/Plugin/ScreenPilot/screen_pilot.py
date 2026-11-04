@@ -39,6 +39,17 @@ except Exception:
     except Exception:
         pass
 
+# ============================================================
+# darwin 平台注入：win32 兼容垫片 + geometry patch
+# 上游代码的 import win32gui / dxcam / uiautomation 等惰性导入
+# 在 macOS 上全部拿到功能等价实现，主调度与 core 模块零改动。
+# ============================================================
+import sys as _sys
+if _sys.platform == "darwin":
+    from screenpilot_core import win32_compat as _compat
+    _compat.install()
+    _compat.patch_geometry()
+
 
 # ============================================================
 # 工具函数
@@ -740,9 +751,15 @@ def _resolve_message_target(root_hwnd, screen_x, screen_y):
 
 def _post_click(hwnd, client_x, client_y, button="left", clicks=1):
     """
-    通过 PostMessage 向目标窗口发送鼠标点击事件（不移动物理光标）。
-    坐标为客户区坐标。
+    双平台后台点击：darwin 走 CGEventPostToPid（全局坐标），
+    Windows 走 PostMessage（客户区坐标）。
     """
+    if sys.platform == "darwin":
+        from screenpilot_core import host_darwin
+        # darwin 无 client 区概念，传入坐标即全局坐标
+        host_darwin.post_click(host_darwin.pid_of_hwnd(hwnd),
+                               client_x, client_y, button=button, clicks=clicks)
+        return
     user32 = ctypes.windll.user32
     msg_down, msg_up, msg_dblclk, mk_flag = _BUTTON_MSG_MAP[button]
 
@@ -1594,6 +1611,20 @@ def cmd_type_text(args):
     hwnd, title = _resolve_hwnd(a)
 
     # ── 双轨：后台模式（PostMessage WM_CHAR，不劫持键盘） ──
+    if sys.platform == "darwin":
+        from screenpilot_core import host_darwin
+        pid = host_darwin.pid_of_hwnd(hwnd)
+        host_darwin.post_text(pid, text)
+        if press_enter:
+            host_darwin.post_key(pid, "enter")
+        result_text = (
+            f"[后台模式·darwin] 已向窗口 \"{title}\" (CGWindowID:{hwnd}) 投递文本输入。\n"
+            f"输入内容: \"{text[:100]}{'...' if len(text) > 100 else ''}\"\n"
+            f"字符数: {len(text)}"
+            + ("\n已按下回车键" if press_enter else "")
+            + "\n键盘焦点未被劫持。"
+        )
+        return {"status": "success", "result": result_text}
     if hwnd:
         user32 = ctypes.windll.user32
 
@@ -1700,6 +1731,15 @@ def cmd_scroll_at(args):
     scroll_delta = amount * WHEEL_DELTA if direction == "up" else -(amount * WHEEL_DELTA)
 
     # ── 双轨：后台模式（SendMessage WM_MOUSEWHEEL，不劫持鼠标） ──
+    if sys.platform == "darwin":
+        from screenpilot_core import host_darwin
+        hwnd_s, title_s = _resolve_hwnd(a)
+        if hwnd_s is None:
+            return {"status": "error", "error": "后台模式（background）必须提供 hwnd 或 windowTitle。"}
+        pid_s = host_darwin.pid_of_hwnd(hwnd_s)
+        host_darwin.post_scroll(pid_s, int(a.get("x") or 0), int(a.get("y") or 0),
+                                direction, int(a.get("amount") or 3))
+        return {"status": "success", "result": f"[后台模式·darwin] 已向 \"{title_s}\" 投递滚轮 {direction} x{a.get('amount') or 3}。"}
     if hwnd:
         import win32gui
 
@@ -1981,10 +2021,33 @@ def cmd_interact(args):
 def cmd_query_windows(args):
     """
     执行 QueryWindows 指令:
-    主动调用 WindowSensor 的 sensor.ps1 获取当前最新的窗口信息
+    Windows 调 WindowSensor 的 sensor.ps1；darwin 直连 Quartz 枚举。
     """
     import subprocess
     import os
+
+    if sys.platform == "darwin":
+        from screenpilot_core.windows import enumerate_windows
+        candidates = enumerate_windows(visible_only=True, min_size=1)
+        lines = []
+        for c in candidates:
+            r = c["windowRect"]
+            lines.append(
+                f"[{c['hwnd']}] {c['title'][:60]} | {c['processName']}"
+                f" | {r['width']}x{r['height']}"
+                + (" | 最小化" if c.get("minimized") else "")
+            )
+        text = (
+            f"成功获取窗口状态（darwin/Quartz，共 {len(candidates)} 个窗口）:\n"
+            + "\n".join(lines) if lines else "无在屏窗口"
+        )
+        return {
+            "status": "success",
+            "result": {
+                "content": [{"type": "text", "text": text}],
+                "sensorData": {"windows": candidates, "platform": "darwin"},
+            },
+        }
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     sensor_path = os.path.join(current_dir, "..", "WindowSensor", "sensor.ps1")
