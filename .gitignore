@@ -99,16 +99,3 @@ VCPChat-Setup.exe
 **/.mypy_cache/
 .coverage
 coverage.xml
-
-# graft's local graph cache — regenerable, not committed (run `graft build`).
-/graft/
-
-# 2026-10-24 工作区清理: 插件垃圾箱/备份残留/运行时日志不入库
-.plugin_trash/
-*.backup-20*
-*.bak.fix-*
-*.bak.*
-VTAnalyzer.log
-
-# 凭证防护: 所有插件config.env禁止入库(含API Key)
-**/config.env
